@@ -1,11 +1,10 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-from typing import Dict, Any
+from typing import Dict
 import io
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # =========================
 # 1. CONFIGURAZIONE & STILE BLOOMBERG
@@ -16,7 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS per look "High Finance"
+# Custom CSS per look "High Finance" corretto
 st.markdown("""
 <style>
     /* Font principale professionale */
@@ -59,10 +58,26 @@ st.markdown("""
         font-size: 12px;
     }
 
-    /* Sidebar */
+    /* SIDEBAR FIX: Sfondo scuro e Testo Bianco Forzato */
     section[data-testid="stSidebar"] {
-        background-color: #1E293B; /* Dark Slate */
-        color: #FFFFFF;
+        background-color: #0F172A; /* Midnight Blue molto scuro */
+    }
+    
+    /* Forza il colore bianco su tutti gli elementi della sidebar */
+    section[data-testid="stSidebar"] .stMarkdown, 
+    section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2,
+    section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] p,
+    section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] span,
+    div[data-testid="stRadio"] label p {
+        color: #F8FAFC !important;
+    }
+
+    /* Stile Radio Button nella Sidebar */
+    div[data-testid="stRadio"] > div {
+        background-color: transparent;
     }
     
     /* Bottoni */
@@ -131,7 +146,6 @@ class WealthModelInstitutional:
         self.price_data = pd.DataFrame()
         self.returns = pd.DataFrame()
         self.betas = {}
-        # Nuovo: Storage per i dati grezzi delle simulazioni
         self.sim_storage = {} 
         np.random.seed(CONFIG["SEED"])
 
@@ -227,7 +241,7 @@ class WealthModelInstitutional:
 
     def run_valuation(self) -> pd.DataFrame:
         results = []
-        self.sim_storage = {} # Reset
+        self.sim_storage = {}
         L = np.linalg.cholesky(CONFIG["CORRELATION_MATRIX"])
 
         for _, r in self.fund_data.iterrows():
@@ -270,7 +284,6 @@ class WealthModelInstitutional:
                 equity_sim = ev_sim - nd
                 fv_sim = equity_sim / shares
 
-                # Store raw simulation for histograms
                 self.sim_storage[ticker] = fv_sim
 
                 fv_med = np.nanmedian(fv_sim)
@@ -347,22 +360,37 @@ def page_overview():
 
         st.subheader("📋 VALUATION TAPE")
         
-        # Formattazione per visualizzazione
         display_df = df.copy()
         display_df = display_df[["Ticker", "CurrentPrice", "FairValue", "Upside_Pct", "Volatility_Risk", "Beta", "WACC"]]
         
-        st.dataframe(
-            display_df.style.format({
-                "CurrentPrice": "{:.2f}",
-                "FairValue": "{:.2f}",
-                "Upside_Pct": "{:.2%}",
-                "Volatility_Risk": "{:.2%}",
-                "Beta": "{:.2f}",
-                "WACC": "{:.1%}"
-            }).background_gradient(subset=["Upside_Pct"], cmap="RdYlGn", vmin=-0.2, vmax=0.5),
-            use_container_width=True,
-            height=500
-        )
+        # Try-Catch per evitare crash se matplotlib manca, ma la soluzione è installarlo
+        try:
+            st.dataframe(
+                display_df.style.format({
+                    "CurrentPrice": "{:.2f}",
+                    "FairValue": "{:.2f}",
+                    "Upside_Pct": "{:.2%}",
+                    "Volatility_Risk": "{:.2%}",
+                    "Beta": "{:.2f}",
+                    "WACC": "{:.1%}"
+                }).background_gradient(subset=["Upside_Pct"], cmap="RdYlGn", vmin=-0.2, vmax=0.5),
+                use_container_width=True,
+                height=500
+            )
+        except ImportError:
+            st.error("⚠️ MANCA 'matplotlib' IN REQUIREMENTS.TXT. Visualizzo tabella semplice.")
+            st.dataframe(
+                display_df.style.format({
+                    "CurrentPrice": "{:.2f}",
+                    "FairValue": "{:.2f}",
+                    "Upside_Pct": "{:.2%}",
+                    "Volatility_Risk": "{:.2%}",
+                    "Beta": "{:.2f}",
+                    "WACC": "{:.1%}"
+                }),
+                use_container_width=True,
+                height=500
+            )
 
         # Download
         buffer = io.BytesIO()
@@ -384,23 +412,19 @@ def page_deep_dive():
     with col_sel:
         selected_ticker = st.selectbox("Select Ticker", tickers)
 
-    # Dati Ticker
     row = df[df["Ticker"] == selected_ticker].iloc[0]
     sim_data = st.session_state.model.sim_storage.get(selected_ticker, [])
 
-    # KPI Ticker
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Current Price", f"{row['CurrentPrice']:.2f}")
     c2.metric("Fair Value (Median)", f"{row['FairValue']:.2f}", delta=f"{row['Upside_Pct']:.1%}")
     c3.metric("Risk (CV)", f"{row['Volatility_Risk']:.2%}")
     c4.metric("Beta", f"{row['Beta']:.2f}")
 
-    # MONTE CARLO CHART
     st.subheader(f"🎲 Monte Carlo Distribution: {selected_ticker}")
     
     fig = go.Figure()
     
-    # Hist
     fig.add_trace(go.Histogram(
         x=sim_data,
         nbinsx=50,
@@ -409,7 +433,6 @@ def page_deep_dive():
         opacity=0.75
     ))
     
-    # Linee Verticali
     fig.add_vline(x=row['CurrentPrice'], line_width=3, line_dash="dash", line_color="#FF6600", annotation_text="Price")
     fig.add_vline(x=row['FairValue'], line_width=3, line_color="#10B981", annotation_text="Fair Value")
     
@@ -423,7 +446,6 @@ def page_deep_dive():
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    # Sensitivity Info
     st.info("The distribution shows the range of possible Fair Values based on volatility of WACC, Growth, and Margins.")
 
 def page_market_view():
@@ -435,7 +457,6 @@ def page_market_view():
         
     df = st.session_state.results
     
-    # SCATTER PLOT
     st.subheader("Risk vs. Reward Frontier")
     
     fig = px.scatter(
@@ -462,7 +483,6 @@ def page_market_view():
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # BAR CHART
     st.subheader("Top Picks (Undervalued)")
     top_picks = df.head(10).sort_values("Upside_Pct", ascending=True)
     
@@ -485,9 +505,8 @@ def page_market_view():
 def main():
     init_session_state()
     
-    # SIDEBAR NAVIGATION
     st.sidebar.title("TERMINAL")
-    st.sidebar.caption("v2.0 Institutional")
+    st.sidebar.caption("v2.1 Institutional")
     
     page = st.sidebar.radio(
         "Navigation",
