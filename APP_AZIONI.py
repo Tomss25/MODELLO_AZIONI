@@ -200,6 +200,8 @@ class WealthModelInstitutional:
                 shares = _to_float(r.get("SharesOut")); ebit = _to_float(r.get("EBIT_TTM"))
                 nd = _to_float(r.get("NetDebt")); tax = _to_float(r.get("TaxRate"))
                 curr_price = _to_float(r.get("CurrentPrice"))
+                
+                # PROTEZIONE CRITICA: Se i dati sono 0, saltiamo, MA dobbiamo gestire il caso in cui tutti saltano
                 if shares <= 0 or ebit <= 0: continue
                 
                 beta = self.betas.get(ticker, 1.0)
@@ -230,6 +232,12 @@ class WealthModelInstitutional:
                 fv_med = np.nanmedian(fv_sim); fv_std = np.nanstd(fv_sim)
                 results.append({"Ticker": ticker, "CurrentPrice": curr_price, "FairValue": fv_med, "Upside_Pct": (fv_med / curr_price - 1) if curr_price > 0 else 0, "Volatility_Risk": fv_std / fv_med if fv_med != 0 else 0, "Beta": beta, "WACC": wacc_base})
             except Exception: continue
+        
+        # --- FIX PROTEZIONE ANTI-CRASH ---
+        if not results:
+            # Ritorna un DataFrame vuoto con le colonne corrette per evitare KeyError
+            return pd.DataFrame(columns=["Ticker", "CurrentPrice", "FairValue", "Upside_Pct", "Volatility_Risk", "Beta", "WACC"])
+
         return pd.DataFrame(results).sort_values("Upside_Pct", ascending=False)
 
 # =========================
@@ -246,7 +254,7 @@ def get_data_yahoo_series(ticker, start_dt):
                 col = df['Adj Close'] if 'Adj Close' in df.columns else df.iloc[:, 0]
             
             series = col.squeeze()
-            if isinstance(series, pd.DataFrame): series = series.iloc[:, 0] # Fix per multi-column return
+            if isinstance(series, pd.DataFrame): series = series.iloc[:, 0]
             return series.ffill()
     except: return None
     return None
@@ -295,7 +303,7 @@ def page_overview():
                 except Exception as e: st.error(f"Errore Fetch: {e}")
     if st.session_state.data_fetched:
         st.subheader("🛠️ REVISIONE DATI FONDAMENTALI")
-        st.info("Se vedi zeri, inserisci i dati manualmente.")
+        st.info("⚠️ Se i valori sono '0', Yahoo ha bloccato il dettaglio. INSERISCI I DATI MANUALMENTE NELLA TABELLA QUI SOTTO.")
         edited_df = st.data_editor(st.session_state.model.fund_data, num_rows="dynamic", use_container_width=True)
         st.session_state.model.fund_data = edited_df
         st.divider()
@@ -305,17 +313,22 @@ def page_overview():
                 st.session_state.results = st.session_state.model.run_valuation()
                 st.rerun()
     if st.session_state.results is not None:
-        st.subheader("📋 VALUTAZIONE FINALE")
-        df = st.session_state.results
-        try: st.dataframe(df.style.format({"CurrentPrice": "{:.2f}", "FairValue": "{:.2f}", "Upside_Pct": "{:.2%}", "Volatility_Risk": "{:.2%}", "Beta": "{:.2f}", "WACC": "{:.1%}"}).background_gradient(subset=["Upside_Pct"], cmap="RdYlGn", vmin=-0.2, vmax=0.5), use_container_width=True, height=500)
-        except ImportError: st.dataframe(df, use_container_width=True)
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: df.to_excel(writer, sheet_name="VALUATION", index=False)
-        st.download_button("📥 DOWNLOAD REPORT", buffer.getvalue(), "Wealth_Model_Output.xlsx")
+        if st.session_state.results.empty:
+            st.error("⛔ NESSUN RISULTATO: Tutti i titoli sono stati scartati. Verifica di aver inserito EBIT e SharesOut > 0 nella tabella sopra.")
+        else:
+            st.subheader("📋 VALUTAZIONE FINALE")
+            df = st.session_state.results
+            try: st.dataframe(df.style.format({"CurrentPrice": "{:.2f}", "FairValue": "{:.2f}", "Upside_Pct": "{:.2%}", "Volatility_Risk": "{:.2%}", "Beta": "{:.2f}", "WACC": "{:.1%}"}).background_gradient(subset=["Upside_Pct"], cmap="RdYlGn", vmin=-0.2, vmax=0.5), use_container_width=True, height=500)
+            except ImportError: st.dataframe(df, use_container_width=True)
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer: df.to_excel(writer, sheet_name="VALUATION", index=False)
+            st.download_button("📥 DOWNLOAD REPORT", buffer.getvalue(), "Wealth_Model_Output.xlsx")
 
 def page_deep_dive():
     st.header("🔍 ANALISI SINGOLO TITOLO")
-    if st.session_state.results is None: st.warning("⚠️ Esegui prima la simulazione."); return
+    if st.session_state.results is None or st.session_state.results.empty: 
+        st.warning("⚠️ Esegui prima la simulazione.")
+        return
     df = st.session_state.results
     tickers = df["Ticker"].tolist()
     col_sel, _ = st.columns([1, 3])
@@ -336,7 +349,8 @@ def page_deep_dive():
 
 def page_market_view():
     st.header("🌍 MARKET MAP")
-    if st.session_state.results is None: st.warning("⚠️ Esegui prima la simulazione."); return
+    if st.session_state.results is None or st.session_state.results.empty: 
+        st.warning("⚠️ Esegui prima la simulazione."); return
     df = st.session_state.results
     fig = px.scatter(df, x="Volatility_Risk", y="Upside_Pct", text="Ticker", size="Beta", color="Upside_Pct", color_continuous_scale="RdYlGn", title="Frontiera Efficiente: Rischio vs Upside")
     fig.update_traces(textposition='top center')
@@ -348,7 +362,6 @@ def page_data_engine():
     st.header("📥 DATA ENGINE & STORICI (Yahoo + Morningstar)")
     st.info("Scarica serie storiche per Analisi Tecnica o Esportazione. Supporta ETF/Fondi Morningstar (ISIN).")
     
-    # Cheat Sheet Tab
     with st.expander("📋 CODICI UTILI & ALIAS (Clicca per espandere)"):
         c1, c2 = st.columns(2)
         with c1:
@@ -358,7 +371,6 @@ def page_data_engine():
             st.markdown("**🛢️ COMMODITIES**\n- Oro: `GC=F`\n- Bitcoin: `BTC-USD`")
             st.markdown("**🇮🇹 MILANO**\n- Usa suffisso `.MI` (es. `SWDA.MI`, `ISP.MI`)")
 
-    # Configuration Area
     col_input, col_conf = st.columns([2, 1])
     
     with col_input:
@@ -374,7 +386,6 @@ def page_data_engine():
     start_date = datetime.now() - timedelta(days=years*365)
     end_date = datetime.now()
 
-    # Alias Logic
     ALIAS_MAP = {
         "SP500": "^GSPC", "S&P500": "^GSPC", "NASDAQ": "^NDX", "NASDAQ100": "^NDX",
         "DOWJONES": "^DJI", "DAX": "^GDAXI", "CAC40": "^FCHI", "ESTX50": "^STOXX50E",
@@ -382,7 +393,6 @@ def page_data_engine():
         "BITCOIN": "BTC-USD", "BTC": "BTC-USD", "EURUSD": "EURUSD=X"
     }
     
-    # Processing Input
     if st.button("🔥 ESEGUI ESTRAZIONE DATI", type="primary", use_container_width=True):
         raw_tokens = re.findall(r"[\w\.\-\^\=]+", raw_input.upper())
         tickers_input = []
@@ -394,9 +404,7 @@ def page_data_engine():
         with st.spinner('Scaricamento dati da Yahoo e Morningstar...'):
             for t in tickers_input:
                 series = None
-                # 1. Try Yahoo
                 series = get_data_yahoo_series(t, start_date)
-                # 2. Try Morningstar if Yahoo fails
                 if series is None:
                     series = get_data_morningstar_series(t, start_date, end_date)
                 
@@ -409,15 +417,11 @@ def page_data_engine():
         if all_series:
             df_daily = pd.DataFrame(all_series).ffill().dropna()
             
-            # Resampling
             if selected_freq_code == "D":
-                df_final = df_daily
-                ann_factor = 252
+                df_final = df_daily; ann_factor = 252
             else:
-                df_final = df_daily.resample(selected_freq_code).last()
-                ann_factor = 52 if selected_freq_code == "W" else 12
+                df_final = df_daily.resample(selected_freq_code).last(); ann_factor = 52 if selected_freq_code == "W" else 12
 
-            # Metrics Calculation
             metrics = []
             for col in df_final.columns:
                 s = df_final[col]
@@ -428,20 +432,11 @@ def page_data_engine():
                     roll_max = s.cummax()
                     drawdown = (s - roll_max) / roll_max
                     max_dd = drawdown.min() * 100
-                    
-                    metrics.append({
-                        "Ticker": col,
-                        "Prezzo Ultimo": round(s.iloc[-1], 2),
-                        "Rend. Tot %": round(tot_ret, 2),
-                        "Volatilità %": round(vol, 2),
-                        "Max DD %": round(max_dd, 2)
-                    })
+                    metrics.append({"Ticker": col, "Prezzo Ultimo": round(s.iloc[-1], 2), "Rend. Tot %": round(tot_ret, 2), "Volatilità %": round(vol, 2), "Max DD %": round(max_dd, 2)})
 
-            # 1. Table
             st.subheader(f"📅 Serie Storiche ({selected_freq_label})")
             st.dataframe(df_final.sort_index(ascending=False).round(2), use_container_width=True, height=400)
             
-            # 2. Charts & Metrics
             c1, c2 = st.columns([2, 1])
             with c1:
                 st.subheader("📈 Performance (Base 100)")
@@ -453,27 +448,17 @@ def page_data_engine():
                 st.dataframe(pd.DataFrame(metrics).set_index("Ticker"), use_container_width=True)
 
             st.markdown("---")
-            
-            # 3. Correlation (Matplotlib/Seaborn Integration)
             st.subheader("🔗 Matrice di Correlazione")
             if len(df_final.columns) > 1:
                 corr = df_final.pct_change().corr()
-                # Use context to avoid affecting global pyplot style
                 with plt.style.context("dark_background"):
                     fig, ax = plt.subplots(figsize=(10, 4))
                     sns.heatmap(corr, annot=True, cmap="RdYlGn", fmt=".2f", vmin=-1, vmax=1, ax=ax)
                     st.pyplot(fig)
 
-            # 4. Download
             df_final.index.name = "Data"
             csv = df_final.to_csv(sep=";", decimal=",", encoding="utf-8-sig")
-            st.download_button(
-                label=f"📥 SCARICA CSV ({selected_freq_label.upper()})", 
-                data=csv, 
-                file_name=f"Analisi_{selected_freq_label}.csv", 
-                mime="text/csv",
-                type="primary"
-            )
+            st.download_button(label=f"📥 SCARICA CSV ({selected_freq_label.upper()})", data=csv, file_name=f"Analisi_{selected_freq_label}.csv", mime="text/csv", type="primary")
         else:
             st.error("Nessun dato valido estratto. Verifica i ticker.")
 
@@ -482,11 +467,9 @@ def page_data_engine():
 # =========================
 def main():
     init_session_state()
-    
     st.sidebar.title("TERMINAL")
-    st.sidebar.caption("Institutional v4.0 (Data Engine Added)")
+    st.sidebar.caption("Institutional v4.1 (Fixed Crash)")
     
-    # Navigation
     page = st.sidebar.radio("Navigazione", 
         ["📊 Valuation Dashboard", "🔍 Deep Dive", "🌍 Market Map", "📥 Data Engine & Storici"]
     )
