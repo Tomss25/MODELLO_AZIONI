@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import yfinance as yf
 
 # =========================
-# 1. CONFIGURAZIONE & STILE BLOOMBERG
+# 1. CONFIGURAZIONE & STILE "BLOOMBERG TERMINAL"
 # =========================
 st.set_page_config(
     page_title="Wealth Model Institutional Terminal",
@@ -16,24 +16,23 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS per look "High Finance"
+# CSS Professionale (Dark Sidebar, Light Content, Font Roboto)
 st.markdown("""
 <style>
-    /* Font principale professionale */
     @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Roboto:wght@300;400;700&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Roboto', sans-serif;
     }
     
-    /* Titoli */
+    /* Intestazioni */
     h1, h2, h3 {
         color: #0F172A;
         font-weight: 700;
         letter-spacing: -0.5px;
     }
     
-    /* KPI Cards - Stile Bloomberg */
+    /* KPI Cards */
     div[data-testid="stMetric"] {
         background-color: #F8FAFC;
         border: 1px solid #E2E8F0;
@@ -53,18 +52,18 @@ st.markdown("""
         color: #0F172A;
     }
     
-    /* Tabelle */
+    /* Tabelle Dati */
     div[data-testid="stDataFrame"] {
         font-family: 'Roboto Mono', monospace;
         font-size: 12px;
     }
 
-    /* SIDEBAR FIX: Sfondo scuro e Testo Bianco Forzato */
+    /* SIDEBAR: Dark Mode Forzata */
     section[data-testid="stSidebar"] {
-        background-color: #0F172A; /* Midnight Blue molto scuro */
+        background-color: #0F172A;
     }
     
-    /* Forza il colore bianco su tutti gli elementi della sidebar */
+    /* Testi bianchi nella sidebar */
     section[data-testid="stSidebar"] .stMarkdown, 
     section[data-testid="stSidebar"] h1,
     section[data-testid="stSidebar"] h2,
@@ -76,14 +75,9 @@ st.markdown("""
         color: #F8FAFC !important;
     }
 
-    /* Stile Radio Button nella Sidebar */
-    div[data-testid="stRadio"] > div {
-        background-color: transparent;
-    }
-    
-    /* Bottoni */
+    /* Bottoni Action */
     div.stButton > button {
-        background-color: #FF6600; /* Bloomberg Orange accent */
+        background-color: #FF6600; /* Bloomberg Orange */
         color: white;
         border: none;
         font-weight: bold;
@@ -138,7 +132,7 @@ def _safe_str(x) -> str:
 
 class WealthModelInstitutional:
     def __init__(self):
-        # Parametri Macro (verranno sovrascritti dalla sidebar)
+        # I parametri macro vengono gestiti dalla sidebar
         self.rf = 0.04
         self.erp = 0.05
         self.gdp = 0.02
@@ -151,107 +145,108 @@ class WealthModelInstitutional:
         np.random.seed(CONFIG["SEED"])
 
     def fetch_from_yahoo(self, tickers_input: str) -> str:
-        """Scarica dati fondamentali e prezzi da Yahoo Finance (Versione Robusta)"""
+        """
+        Scarica dati da Yahoo Finance con logica difensiva per evitare crash
+        su colonne mancanti o formati imprevisti.
+        """
         status_msg = ""
-        # Pulizia input
         tickers_list = [t.strip().upper() for t in tickers_input.replace(",", " ").split() if t.strip()]
         
         if not tickers_list:
             raise ValueError("Inserisci almeno un Ticker valido.")
 
-        # 1. SCARICO PREZZI CON CHECK ERRORI
+        # --- FASE 1: SCARICO PREZZI (Resiliente) ---
         try:
-            # Scarica dataset grezzo
-            raw_df = yf.download(tickers_list, period="2y", interval="1wk", progress=False)
+            # Scarica dati grezzi senza aggiustamenti automatici per controllare le colonne
+            raw_df = yf.download(tickers_list, period="2y", interval="1wk", progress=False, auto_adjust=False)
             
             if raw_df.empty:
-                raise ValueError("Nessun dato trovato su Yahoo. Verifica i Ticker.")
+                raise ValueError("Yahoo non ha restituito dati. Controlla i Ticker.")
 
-            # Gestione Colonne Resiliente
-            if 'Adj Close' in raw_df.columns:
-                data = raw_df['Adj Close']
-            elif 'Close' in raw_df.columns:
-                data = raw_df['Close']
+            data = pd.DataFrame()
+
+            # Gestione MultiIndex (quando ci sono più ticker)
+            if isinstance(raw_df.columns, pd.MultiIndex):
+                # Prova a prendere 'Adj Close', se fallisce prendi 'Close'
+                try:
+                    data = raw_df.xs('Adj Close', axis=1, level=0, drop_level=True)
+                except KeyError:
+                    try:
+                        data = raw_df.xs('Close', axis=1, level=0, drop_level=True)
+                    except KeyError:
+                        # Se tutto fallisce, prendi le prime N colonne
+                        data = raw_df.iloc[:, :len(tickers_list)]
+            
+            # Gestione Index Singolo (un solo ticker)
             else:
-                data = raw_df # Fallback estremo
-            
-            # Normalizzazione se Serie o DataFrame singolo
-            if isinstance(data, pd.Series):
-                data = data.to_frame(name=tickers_list[0])
-            
-            if len(tickers_list) == 1 and isinstance(data, pd.DataFrame) and tickers_list[0] not in data.columns:
-                 data.columns = [tickers_list[0]]
+                # Cerca la colonna corretta
+                tgt_col = None
+                for candidate in ['Adj Close', 'Close', 'AdjClose']:
+                    if candidate in raw_df.columns:
+                        tgt_col = candidate
+                        break
+                
+                if tgt_col:
+                    data = raw_df[[tgt_col]].copy()
+                else:
+                    # Prendi l'ultima colonna disponibile
+                    data = raw_df.iloc[:, -1:].copy()
+                
+                # Rinomina la colonna con il nome del ticker
+                data.columns = [tickers_list[0]]
 
-            # Pulizia Prezzi
+            # Pulizia finale prezzi
             data.index = pd.to_datetime(data.index).tz_localize(None)
             self.price_data = data.ffill().dropna(how="all")
+            
+            if self.price_data.empty:
+                 raise ValueError("Dati prezzi vuoti dopo il download.")
+
             self.returns = np.log(self.price_data / self.price_data.shift(1)).dropna(how="all")
             status_msg += f"✅ Market Data: {len(tickers_list)} tickers recuperati.\n"
-        except Exception as e:
-            raise ValueError(f"Errore download prezzi: {e}")
 
-        # 2. SCARICO FONDAMENTALI
+        except Exception as e:
+            raise ValueError(f"Errore critico download prezzi: {e}")
+
+        # --- FASE 2: SCARICO FONDAMENTALI ---
         fund_list = []
         progress_bar = st.progress(0)
         
         for i, t in enumerate(tickers_list):
             try:
                 stock = yf.Ticker(t)
-                fast_info = stock.fast_info 
                 info = stock.info
                 
-                # Logica recupero dati a cascata
+                # Recupero dati con fallback (se manca X, usa Y)
+                # EBIT
                 ebit = info.get('ebit')
                 if ebit is None: ebit = info.get('ebitda')
-                if ebit is None: ebit = info.get('totalRevenue', 0) * 0.15 
+                if ebit is None: ebit = (info.get('totalRevenue', 0) or 0) * 0.15
                 
                 sales = info.get('totalRevenue', 0)
                 
-                # Tax Rate Stima
-                try:
-                    pretax = info.get('pretaxIncome')
-                    tax_prov = info.get('taxProvision')
-                    if pretax and tax_prov and pretax != 0:
-                        tax_rate = tax_prov / pretax
-                    else:
-                        tax_rate = info.get('taxRate', 0.25)
-                except:
-                    tax_rate = 0.25
-
+                # Tax Rate
+                tax_rate = info.get('taxRate', 0.25)
                 if tax_rate is None: tax_rate = 0.25
 
                 # Net Debt
-                total_debt = info.get('totalDebt', 0)
-                cash = info.get('totalCash', 0)
-                if total_debt is None: total_debt = 0
-                if cash is None: cash = 0
-                net_debt = total_debt - cash
+                d = info.get('totalDebt') or 0
+                c = info.get('totalCash') or 0
+                net_debt = d - c
                 
-                # Shares & Price
-                shares = info.get('sharesOutstanding', 0)
-                curr_price = 0.0
-                
-                try:
-                    curr_price = fast_info.last_price
-                except:
-                    curr_price = info.get('currentPrice', info.get('regularMarketPreviousClose', 0))
-                
+                # Prezzo Corrente
+                curr_price = info.get('currentPrice') or info.get('regularMarketPreviousClose') or 0.0
                 if curr_price == 0 and t in self.price_data.columns:
                     curr_price = self.price_data[t].iloc[-1]
 
-                if shares is None or shares == 0:
-                    mkt_cap = info.get('marketCap', 0)
-                    if mkt_cap > 0 and curr_price > 0:
-                        shares = mkt_cap / curr_price
-                    else:
-                        shares = 1.0
+                # Shares Out
+                shares = info.get('sharesOutstanding') or 0
+                if (shares == 0) and (curr_price > 0):
+                    shares = (info.get('marketCap') or 0) / curr_price
 
                 # ROIC & Payout
-                roic = info.get('returnOnEquity', 0.12)
-                if roic is None: roic = 0.12
-                
-                payout = info.get('payoutRatio', 0.0)
-                if payout is None: payout = 0.0
+                roic = info.get('returnOnEquity', 0.12) or 0.12
+                payout = info.get('payoutRatio', 0.0) or 0.0
 
                 fund_list.append({
                     "Ticker": t,
@@ -264,8 +259,9 @@ class WealthModelInstitutional:
                     "SharesOut": shares,
                     "CurrentPrice": curr_price
                 })
-            except Exception as e:
-                print(f"Warning su {t}: {e}")
+            except Exception:
+                # Se un ticker è corrotto, lo saltiamo senza bloccare gli altri
+                pass
             
             progress_bar.progress((i + 1) / len(tickers_list))
 
@@ -273,13 +269,15 @@ class WealthModelInstitutional:
         self.fund_data = pd.DataFrame(fund_list)
         
         if self.fund_data.empty:
-            raise ValueError("Impossibile recuperare i dati fondamentali.")
+            raise ValueError("Impossibile scaricare i fondamentali. Verifica la connessione o i ticker.")
             
         status_msg += f"✅ Fundamentals: {len(self.fund_data)} aziende analizzate."
         return status_msg
 
     def calculate_betas(self) -> None:
         if self.returns.empty: return
+        
+        # Benchmark interno (Media del portafoglio)
         bench_series = self.returns.mean(axis=1).dropna()
         bench_var = bench_series.var()
         if bench_var == 0: bench_var = 1.0
@@ -292,14 +290,18 @@ class WealthModelInstitutional:
                     continue
                 cov = common.iloc[:, 0].cov(common.iloc[:, 1])
                 beta = cov / bench_var
-                self.betas[t] = max(0.4, min(2.5, beta))
+                self.betas[t] = max(0.4, min(2.5, beta)) # Capping prudenziale
             except:
                 self.betas[t] = 1.0
 
     def run_valuation(self) -> pd.DataFrame:
         results = []
         self.sim_storage = {}
-        L = np.linalg.cholesky(CONFIG["CORRELATION_MATRIX"])
+        # Scomposizione Cholesky per correlazione scenari
+        try:
+            L = np.linalg.cholesky(CONFIG["CORRELATION_MATRIX"])
+        except:
+            L = np.eye(3) # Fallback se matrice non positiva definita
 
         for _, r in self.fund_data.iterrows():
             ticker = _safe_str(r.get("Ticker"))
@@ -312,19 +314,22 @@ class WealthModelInstitutional:
 
                 if shares <= 0 or ebit <= 0: continue
 
-                # WACC
+                # Calcolo WACC Dinamico
                 beta = self.betas.get(ticker, 1.0)
                 ke = self.rf + beta * self.erp
                 kd = self.rf + CONFIG["CREDIT_SPREAD"]
                 
                 equity_val = shares * curr_price
                 ev = equity_val + max(0, nd)
-                wd = min(max(nd, 0) / ev, CONFIG["MAX_DEBT_WEIGHT"]) if ev > 0 else 0.0
+                
+                wd = 0.0
+                if ev > 0:
+                    wd = min(max(nd, 0) / ev, CONFIG["MAX_DEBT_WEIGHT"])
                 
                 wacc_base = max(((1 - wd) * ke + wd * kd * (1 - tax)), CONFIG["MIN_WACC"])
                 nopat_base = ebit * (1 - tax)
 
-                # Monte Carlo
+                # Monte Carlo Vectorized
                 Z = np.random.normal(0, 1, size=(3, CONFIG["MC_SIMULATIONS"]))
                 shocks = L @ Z
 
@@ -335,12 +340,16 @@ class WealthModelInstitutional:
                 fcff_sum = np.zeros(CONFIG["MC_SIMULATIONS"])
                 curr_nopat = nopat_sim
                 
+                # DCF 10 Anni
                 for t in range(1, 11):
+                    # Crescita che decade verso GDP
                     g_t = np.maximum(gdp_sim, (wacc_sim + 0.015) * np.exp(-0.2 * t)) 
+                    # Reinvestimento implicito 30%
                     f = curr_nopat * (1 + g_t) * 0.70 
                     fcff_sum += f / ((1 + wacc_sim) ** t)
                     curr_nopat *= (1 + g_t)
 
+                # Terminal Value
                 tv = curr_nopat * (1 + gdp_sim) / np.maximum(wacc_sim - gdp_sim, CONFIG["MIN_TV_SPREAD"])
                 ev_sim = fcff_sum + (tv / ((1 + wacc_sim) ** 10))
                 equity_sim = ev_sim - nd
@@ -366,7 +375,7 @@ class WealthModelInstitutional:
         return pd.DataFrame(results).sort_values("Upside_Pct", ascending=False)
 
 # =========================
-# 4. PAGINE DASHBOARD
+# 4. UI: DASHBOARD & NAVIGAZIONE
 # =========================
 
 def init_session_state():
@@ -380,7 +389,7 @@ def init_session_state():
 def page_overview():
     st.header("⚡ WEALTH MODEL - TERMINAL")
     
-    # KPI Macro
+    # Visualizzazione Macro (Solo lettura qui, modifica in Sidebar)
     k1, k2, k3 = st.columns(3)
     k1.metric("Risk Free (Rf)", f"{st.session_state.model.rf:.2%}")
     k2.metric("Equity Risk Prem. (ERP)", f"{st.session_state.model.erp:.2%}")
@@ -388,7 +397,7 @@ def page_overview():
 
     st.divider()
 
-    # Input & Fetch
+    # Input Area
     col_input, col_action = st.columns([3, 1])
     with col_input:
         tickers_input = st.text_area("Inserisci Ticker (es: AAPL MSFT ENI.MI LVMH.PA)", 
@@ -405,7 +414,7 @@ def page_overview():
                 except Exception as e:
                     st.error(f"Errore Fetch: {e}")
 
-    # Override Manuale
+    # Override Manuale (Cruciale)
     if st.session_state.data_fetched:
         st.subheader("🛠️ REVISIONE DATI FONDAMENTALI")
         st.info("Modifica i valori nella tabella se necessario (doppio click sulla cella).")
@@ -415,6 +424,7 @@ def page_overview():
             num_rows="dynamic",
             use_container_width=True,
             column_config={
+                "Ticker": st.column_config.TextColumn(disabled=True),
                 "EBIT_TTM": st.column_config.NumberColumn(format="%.0f"),
                 "NetDebt": st.column_config.NumberColumn(format="%.0f"),
                 "SharesOut": st.column_config.NumberColumn(format="%.2f"),
@@ -427,18 +437,18 @@ def page_overview():
 
         st.divider()
         
-        if st.button("🚀 LANCIA SIMULAZIONE", type="primary", use_container_width=True):
-             with st.spinner(f"Esecuzione {CONFIG['MC_SIMULATIONS']} scenari..."):
+        if st.button("🚀 LANCIA SIMULAZIONE MONTE CARLO", type="primary", use_container_width=True):
+             with st.spinner(f"Esecuzione {CONFIG['MC_SIMULATIONS']} scenari vettoriali..."):
                 st.session_state.model.calculate_betas()
                 st.session_state.results = st.session_state.model.run_valuation()
                 st.rerun()
 
-    # Risultati
+    # Output Risultati
     if st.session_state.results is not None:
         st.subheader("📋 VALUTAZIONE FINALE")
         df = st.session_state.results
         
-        # Gestione Sicura Colori (Richiede matplotlib, fallback se manca)
+        # Tentativo di formattazione colori (Safe Mode)
         try:
             st.dataframe(
                 df.style.format({
@@ -452,19 +462,19 @@ def page_overview():
                 use_container_width=True, height=500
             )
         except ImportError:
-            st.warning("Installare 'matplotlib' per vedere i colori. Visualizzazione standard attiva.")
+            st.warning("Matplotlib non trovato. Visualizzazione standard.")
             st.dataframe(df, use_container_width=True)
 
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df.to_excel(writer, sheet_name="VALUATION", index=False)
-        st.download_button("📥 DOWNLOAD REPORT", buffer.getvalue(), "Wealth_Model_Output.xlsx")
+        st.download_button("📥 DOWNLOAD REPORT EXCEL", buffer.getvalue(), "Wealth_Model_Output.xlsx")
 
 def page_deep_dive():
     st.header("🔍 ANALISI SINGOLO TITOLO")
     
     if st.session_state.results is None:
-        st.warning("Esegui prima la simulazione nella Dashboard.")
+        st.warning("⚠️ Esegui prima la simulazione nella Dashboard.")
         return
 
     df = st.session_state.results
@@ -483,20 +493,23 @@ def page_deep_dive():
     c3.metric("Rischio (CV)", f"{row['Volatility_Risk']:.2%}")
     c4.metric("WACC", f"{row['WACC']:.2%}")
 
+    # Plotly Histogram
     fig = go.Figure()
     fig.add_trace(go.Histogram(x=sim_data, nbinsx=60, name="Distribuzione FV", marker_color='#334155', opacity=0.75))
     fig.add_vline(x=row['CurrentPrice'], line_width=3, line_dash="dash", line_color="#FF6600", annotation_text="Prezzo Oggi")
     fig.add_vline(x=row['FairValue'], line_width=3, line_color="#10B981", annotation_text="Fair Value")
-    fig.update_layout(title="Densità di Probabilità Fair Value", template="plotly_white", height=500)
+    
+    fig.update_layout(title="Densità di Probabilità Fair Value (Monte Carlo)", template="plotly_white", height=500)
     st.plotly_chart(fig, use_container_width=True)
 
 def page_market_view():
     st.header("🌍 MARKET MAP")
     if st.session_state.results is None:
-        st.warning("Esegui prima la simulazione.")
+        st.warning("⚠️ Esegui prima la simulazione.")
         return
     df = st.session_state.results
     
+    # Scatter Plot Risk/Reward
     fig = px.scatter(
         df, x="Volatility_Risk", y="Upside_Pct", text="Ticker", size="Beta",
         color="Upside_Pct", color_continuous_scale="RdYlGn",
@@ -514,10 +527,10 @@ def main():
     init_session_state()
     
     st.sidebar.title("TERMINAL")
-    st.sidebar.caption("Institutional v2.3")
+    st.sidebar.caption("Institutional v3.0 Final")
     st.sidebar.subheader("¶ Macro Assumptions")
     
-    # Input Macro Sidebar
+    # Input Macro Sidebar - Controllo Globale
     st.session_state.model.rf = st.sidebar.number_input("Risk Free Rate", 0.0, 0.20, 0.04, 0.001, format="%.3f")
     st.session_state.model.erp = st.sidebar.number_input("Equity Risk Premium", 0.0, 0.20, 0.05, 0.001, format="%.3f")
     st.session_state.model.gdp = st.sidebar.number_input("GDP Growth (L-T)", -0.05, 0.10, 0.02, 0.001, format="%.3f")
