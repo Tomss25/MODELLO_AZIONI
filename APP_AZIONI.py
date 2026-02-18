@@ -6,10 +6,9 @@ import io
 import plotly.express as px
 import plotly.graph_objects as go
 import yfinance as yf
-import requests
 
 # =========================
-# 1. CONFIGURAZIONE & STILE "BLOOMBERG TERMINAL"
+# 1. CONFIGURAZIONE & STILE
 # =========================
 st.set_page_config(
     page_title="Wealth Model Institutional Terminal",
@@ -17,76 +16,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS Professionale
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&family=Roboto:wght@300;400;700&display=swap');
-    
-    html, body, [class*="css"] {
-        font-family: 'Roboto', sans-serif;
-    }
-    
-    h1, h2, h3 {
-        color: #0F172A;
-        font-weight: 700;
-        letter-spacing: -0.5px;
-    }
-    
-    /* KPI Cards */
-    div[data-testid="stMetric"] {
-        background-color: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        padding: 15px;
-        border-radius: 5px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    }
-    div[data-testid="stMetricLabel"] {
-        font-size: 12px;
-        color: #64748B;
-        text-transform: uppercase;
-        font-weight: 600;
-    }
-    div[data-testid="stMetricValue"] {
-        font-family: 'Roboto Mono', monospace;
-        font-size: 24px;
-        color: #0F172A;
-    }
-    
-    /* Tabelle */
-    div[data-testid="stDataFrame"] {
-        font-family: 'Roboto Mono', monospace;
-        font-size: 12px;
-    }
-
-    /* SIDEBAR: Dark Mode */
-    section[data-testid="stSidebar"] {
-        background-color: #0F172A;
-    }
-    section[data-testid="stSidebar"] .stMarkdown, 
-    section[data-testid="stSidebar"] h1,
-    section[data-testid="stSidebar"] h2,
-    section[data-testid="stSidebar"] h3,
-    section[data-testid="stSidebar"] p,
-    section[data-testid="stSidebar"] label,
-    section[data-testid="stSidebar"] span,
-    div[data-testid="stRadio"] label p {
-        color: #F8FAFC !important;
-    }
-
-    /* Bottoni */
-    div.stButton > button {
-        background-color: #FF6600; 
-        color: white;
-        border: none;
-        font-weight: bold;
-        text-transform: uppercase;
-        letter-spacing: 1px;
-    }
-    div.stButton > button:hover {
-        background-color: #CC5200;
-        border: none;
-        color: white;
-    }
+    html, body, [class*="css"] { font-family: 'Roboto', sans-serif; }
+    h1, h2, h3 { color: #0F172A; font-weight: 700; letter-spacing: -0.5px; }
+    div[data-testid="stMetric"] { background-color: #F8FAFC; border: 1px solid #E2E8F0; padding: 15px; border-radius: 5px; }
+    div[data-testid="stMetricLabel"] { font-size: 12px; color: #64748B; text-transform: uppercase; font-weight: 600; }
+    div[data-testid="stMetricValue"] { font-family: 'Roboto Mono', monospace; font-size: 24px; color: #0F172A; }
+    div[data-testid="stDataFrame"] { font-family: 'Roboto Mono', monospace; font-size: 12px; }
+    section[data-testid="stSidebar"] { background-color: #0F172A; }
+    section[data-testid="stSidebar"] .stMarkdown, section[data-testid="stSidebar"] h1,
+    section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3,
+    section[data-testid="stSidebar"] p, section[data-testid="stSidebar"] label,
+    section[data-testid="stSidebar"] span, div[data-testid="stRadio"] label p { color: #F8FAFC !important; }
+    div.stButton > button { background-color: #FF6600; color: white; border: none; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+    div.stButton > button:hover { background-color: #CC5200; border: none; color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -142,8 +87,8 @@ class WealthModelInstitutional:
 
     def fetch_from_yahoo(self, tickers_input: str) -> str:
         """
-        Scarica dati da Yahoo Finance utilizzando una SESSIONE REALE
-        per evitare i blocchi anti-bot e logica permissiva sui dati mancanti.
+        Scarica dati da Yahoo Finance. 
+        Rimosso requests.Session per compatibilità con yfinance >= 0.2.50
         """
         status_msg = ""
         tickers_list = [t.strip().upper() for t in tickers_input.replace(",", " ").split() if t.strip()]
@@ -151,23 +96,17 @@ class WealthModelInstitutional:
         if not tickers_list:
             raise ValueError("Inserisci almeno un Ticker valido.")
 
-        # --- TRUCCO ANTI-BLOCCO: SESSIONE BROWSER FAKE ---
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        })
-
         # --- FASE 1: SCARICO PREZZI ---
         try:
-            # Passiamo la sessione a yf.download
-            raw_df = yf.download(tickers_list, period="2y", interval="1wk", progress=False, auto_adjust=False, session=session)
+            # Download standard: lasciamo gestire la sessione a yfinance
+            raw_df = yf.download(tickers_list, period="2y", interval="1wk", progress=False, auto_adjust=False)
             
             if raw_df.empty:
                 raise ValueError("Yahoo non ha restituito dati. Controlla i Ticker.")
 
             data = pd.DataFrame()
 
-            # Gestione MultiIndex
+            # Logica estrazione colonne (Resiliente a MultiIndex/SingleIndex)
             if isinstance(raw_df.columns, pd.MultiIndex):
                 try:
                     data = raw_df.xs('Adj Close', axis=1, level=0, drop_level=True)
@@ -176,23 +115,18 @@ class WealthModelInstitutional:
                         data = raw_df.xs('Close', axis=1, level=0, drop_level=True)
                     except KeyError:
                         data = raw_df.iloc[:, :len(tickers_list)]
-            
-            # Gestione Index Singolo
             else:
                 tgt_col = None
                 for candidate in ['Adj Close', 'Close', 'AdjClose']:
                     if candidate in raw_df.columns:
                         tgt_col = candidate
                         break
-                
                 if tgt_col:
                     data = raw_df[[tgt_col]].copy()
                 else:
                     data = raw_df.iloc[:, -1:].copy()
-                
                 data.columns = [tickers_list[0]]
 
-            # Pulizia Prezzi
             data.index = pd.to_datetime(data.index).tz_localize(None)
             self.price_data = data.ffill().dropna(how="all")
             
@@ -210,7 +144,7 @@ class WealthModelInstitutional:
         progress_bar = st.progress(0)
         
         for i, t in enumerate(tickers_list):
-            # Inizializza tutto a 0 per sicurezza
+            # Valori Default = 0 (Così puoi editarli se il download fallisce)
             ebit = 0.0
             sales = 0.0
             tax_rate = 0.25
@@ -221,18 +155,15 @@ class WealthModelInstitutional:
             payout = 0.0
 
             try:
-                # Usa la sessione anche qui se possibile (yf.Ticker non accetta session direttamente ma usa global requests, 
-                # il download dei prezzi ha già 'scaldato' la connessione)
                 stock = yf.Ticker(t)
                 
-                # Prezzo storico come fallback
+                # Prezzo da storico se disponibile
                 if t in self.price_data.columns:
                     curr_price = self.price_data[t].iloc[-1]
                 
-                # Tentativo recupero Info
                 try:
                     info = stock.info
-                    # Se info è vuoto o bloccato, salta al blocco except
+                    # Se info esiste, prova a popolare i dati
                     if info and len(info) > 5:
                         ebit = info.get('ebit') or info.get('ebitda') or (info.get('totalRevenue', 0) * 0.15) or 0
                         sales = info.get('totalRevenue', 0)
@@ -251,9 +182,9 @@ class WealthModelInstitutional:
                         roic = info.get('returnOnEquity', 0.12) or 0.12
                         payout = info.get('payoutRatio', 0.0) or 0.0
                 except:
-                    pass # Se fallisce, rimangono i valori di default (0)
+                    pass 
 
-                # Fallback Shares
+                # Fallback per Shares
                 if (shares == 0) and (curr_price > 0):
                     try:
                         mkt_cap = stock.info.get('marketCap')
@@ -283,9 +214,9 @@ class WealthModelInstitutional:
         self.fund_data = pd.DataFrame(fund_list)
         
         if self.fund_data.empty:
-            raise ValueError("Tutti i ticker sono invalidi o bloccati.")
+            raise ValueError("Tutti i ticker sono invalidi.")
             
-        status_msg += f"✅ Fundamentals: {len(self.fund_data)} aziende (Verifica i dati a 0 nella tabella)."
+        status_msg += f"✅ Fundamentals: {len(self.fund_data)} aziende (Verifica i dati a 0)."
         return status_msg
 
     def calculate_betas(self) -> None:
@@ -380,9 +311,8 @@ class WealthModelInstitutional:
         return pd.DataFrame(results).sort_values("Upside_Pct", ascending=False)
 
 # =========================
-# 4. UI: DASHBOARD
+# 4. DASHBOARD UI
 # =========================
-
 def init_session_state():
     if 'model' not in st.session_state:
         st.session_state.model = WealthModelInstitutional()
@@ -403,7 +333,7 @@ def page_overview():
 
     col_input, col_action = st.columns([3, 1])
     with col_input:
-        tickers_input = st.text_area("Inserisci Ticker (es: AAPL MSFT ENI.MI)", 
+        tickers_input = st.text_area("Inserisci Ticker (es: AAPL MSFT)", 
                                      placeholder="Lista ticker separati da spazio...", height=68)
     with col_action:
         st.write("") 
@@ -419,7 +349,7 @@ def page_overview():
 
     if st.session_state.data_fetched:
         st.subheader("🛠️ REVISIONE DATI FONDAMENTALI")
-        st.info("I dati a 0 indicano che Yahoo ha bloccato il dettaglio. INSERISCI MANUALMENTE.")
+        st.info("Se vedi zeri, inserisci i dati manualmente. Doppio click sulla cella.")
         
         edited_df = st.data_editor(
             st.session_state.model.fund_data,
@@ -522,7 +452,7 @@ def main():
     init_session_state()
     
     st.sidebar.title("TERMINAL")
-    st.sidebar.caption("Institutional v3.1 Final")
+    st.sidebar.caption("Institutional v3.2 (No-Session Fix)")
     st.sidebar.subheader("¶ Macro Assumptions")
     
     st.session_state.model.rf = st.sidebar.number_input("Risk Free Rate", 0.0, 0.20, 0.04, 0.001, format="%.3f")
