@@ -6,7 +6,3 @@ openpyxl
 xlsxwriter
 plotly
 matplotlib
-yfinance
-requests
-mstarpy
-seaborn
